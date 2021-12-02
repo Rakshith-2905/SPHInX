@@ -180,18 +180,12 @@ class StyleGAN_Inversion():
 
         att_imgs = self.image_operations(img, None)
 
-        if self.ops:
-            save_dir = args.output_dir + self.ops
-
         K=len(att_imgs)
 
         attribute = Attribute_learner(k=K, n_latent=args.n_latent).to(device)
 
         Ps, Pc, noises, optimizer = self.init_learners()
         optimizer.add_param_group({'params': attribute.parameters()})
-        
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
 
         pbar = tqdm(range(args.step))
         # Iterate for the desired number of steps
@@ -249,6 +243,9 @@ class StyleGAN_Inversion():
         alphas = np.insert(alphas, 0, 0)
         
         
+        if not os.path.exists(args.output_dir + 'attribute_walk/'):
+            os.makedirs(args.output_dir + 'attribute_walk/')
+                        
         alphas = interpolate_vector(alphas.tolist(), 2)
         gif_imgs = []
         for alpha in alphas:
@@ -257,11 +254,15 @@ class StyleGAN_Inversion():
             img_gen, _ = self.generator(att_latent_in, semantic_input=semantic_input, noise=noises)
 
             rot_img_gen_ar = make_image(img_gen)
-        
 
-            gif_imgs.append(rot_img_gen_ar)
+            # Save the image
+            img_name = args.output_dir + 'attribute_walk/' + f'{alpha:.2f}' + "_alpha.png"
+            pil_img = Image.fromarray(rot_img_gen_ar[0])
+            pil_img.save(img_name)
 
-        imageio.mimsave(save_dir + 'attribute_walk.gif', gif_imgs, duration=0.25) 
+            gif_imgs.append(imageio.imread(args.output_dir + 'attribute_walk/' + f'{alpha:.2f}' + "_alpha.png"))
+
+        imageio.mimsave(args.output_dir + 'attribute_walk/' + 'walk.gif', gif_imgs, duration=0.25) 
 
     def invert(self, img):
  
