@@ -44,21 +44,6 @@ class StyleGAN_Inversion():
             model="net-lin", net="vgg", use_gpu=device.startswith("cuda")
         )
         self.ssim_loss = SSIM(window_size = 11)
-
-        if args.ops == 'super_res':
-            self.downsampler = BicubicDownSample(int(args.ops_fac))
-            pros_size = args.size/args.ops_fac
-            if 256/pros_size > 1:
-                self.upsampler = nn.Upsample(scale_factor=256/pros_size, mode='bicubic')
-
-        elif args.ops == 'compressed_sensing':
-            perc = args.ops_fac
-            m = int(perc * (3 * args.size ** 2))
-            self.indices = torch.tensor(np.random.choice(np.arange(args.size * args.size * 3), m, replace=False))
-            self.filters = torch.ones((args.size * args.size * 3), device=device).normal_().unsqueeze(0).to(device)
-            self.sign_pattern = (torch.rand(args.size * args.size * 3) >
-                                0.5).type(torch.int32).to(device)
-            self.sign_pattern = 2 * self.sign_pattern - 1
     
     def init_learners(self, weights_path=None):
         # Initialize the latent projection head and create an optimizer
@@ -133,7 +118,7 @@ class StyleGAN_Inversion():
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
-        if args.ops and args.ops != 'compressed_sensing':
+        if args.ops:
 
             gt_pros_ar = make_image(pros_gt)[0]
             gen_pros_ar = make_image(pros_gen)[0]
@@ -190,28 +175,6 @@ class StyleGAN_Inversion():
             )
 
         self.save_results(img, img_gen, pros_true, pros_gen)
-
-        gt_ar = make_image(img)
-        gen_ar = make_image(img_gen)
-
-        loss_dict = {}
-        loss_dict['mse']  = mse_loss.item()
-        loss_dict['pips'] = p_loss.item()
-        loss_dict['ssim'] = self.ssim_loss(img, img_gen).item()
-        loss_dict['psnr'] = PSNR(gt_ar, gen_ar)
-
-        if args.ops:
-            loss_dict['mse_metric'] = F.mse_loss(img, img_gen).item()
-            if img.shape[-1] < 256:
-                loss_dict['pips_metric'] = 0
-            else:
-                loss_dict['pips_metric'] = self.percept(downsampler_image_256(img), 
-                                        downsampler_image_256(img_gen)).item()
-        else:
-            loss_dict['pips_metric'] =  loss_dict['pips']
-            loss_dict['mse_metric'] = loss_dict['mse']
-
-        return loss_dict
     
     def learn_att_inversion(self, img):
 
@@ -246,9 +209,11 @@ class StyleGAN_Inversion():
                 img_gen, _ = self.generator(att_latent_ins[k], semantic_input=semantic_input, noise=noises)
 
                 att_img_gens.append(img_gen)
-        
-                att_p_loss.append(self.percept(downsampler_image_256(img_gen), 
-                                        downsampler_image_256(att_img)))
+                if img_gen.shape[-1] < 256:
+                        att_p_loss.append(torch.zeros(1).to(img_gen.device))
+                else:
+                    att_p_loss.append(self.percept(downsampler_image_256(img_gen), 
+                                            downsampler_image_256(att_img)))
 
                 att_mse_loss.append(F.mse_loss(img_gen, att_img))
             
@@ -277,64 +242,26 @@ class StyleGAN_Inversion():
                 )
             )
 
-        ssim, psnr = [], []
-        for k, att_img in enumerate(att_imgs):
-            gt_ar = make_image(att_img)
-            gen_ar = make_image(att_img_gens[k])
-
-            ssim.append(self.ssim_loss(att_img, att_img_gens[k]).item())
-            psnr.append(PSNR(gt_ar, gen_ar))
-
-            # Save the image
-            img_name = save_dir + str(k) + "-gen.png"
-            pil_img = Image.fromarray(gen_ar[0])
-            pil_img.save(img_name)
-            
-            img_name = save_dir + str(k) + "-gt.png"
-            pil_img = Image.fromarray(gt_ar[0])
-            pil_img.save(img_name)
-            
-        loss_dict = {}
-        loss_dict['mse']  = mse_loss.item()
-        loss_dict['pips'] = p_loss.item()
-        loss_dict['att_ssim'] = ssim
-        loss_dict['att_psnr'] = psnr
-
-        with open(save_dir + 'losses.json', 'w', encoding='utf-8') as f:
-            json.dump(loss_dict, f, ensure_ascii=False, indent=4)
-
         latent_in, semantic_input = self.init_state(Ps, Pc)
 
         D = attribute.D
         alphas = attribute.alpha.detach().cpu().numpy()
         alphas = np.insert(alphas, 0, 0)
-
-        with open(save_dir + 'alphas.txt', 'w') as f:
-            for k, alpha in enumerate(alphas):
-                f.write("alpha %s: %s\n" % (k, alpha))
         
         
         alphas = interpolate_vector(alphas.tolist(), 2)
         gif_imgs = []
-        # for alpha in np.linspace(alphas[0], alphas[-1], K*2, endpoint=True):
         for alpha in alphas:
             att_latent_in = latent_in + (alpha * D/torch.linalg.norm(D, dim=1).unsqueeze(1))
                                 
             img_gen, _ = self.generator(att_latent_in, semantic_input=semantic_input, noise=noises)
 
             rot_img_gen_ar = make_image(img_gen)
-            
-            if not os.path.exists(save_dir + 'alpha_walk/'):
-                os.makedirs(save_dir + 'alpha_walk/')
+        
 
-            # Save the image
-            img_name = save_dir + 'alpha_walk/' + f'{alpha:.3f}' + "_alpha.png"
-            pil_img = Image.fromarray(rot_img_gen_ar[0])
-            pil_img.save(img_name)
+            gif_imgs.append(rot_img_gen_ar)
 
-            gif_imgs.append(imageio.imread(save_dir + 'alpha_walk/' + f'{alpha:.3f}' + "_alpha.png"))
-
-        imageio.mimsave(save_dir + 'alpha_walk/walk.gif', gif_imgs, duration=0.25) 
+        imageio.mimsave(save_dir + 'attribute_walk.gif', gif_imgs, duration=0.25) 
 
     def invert(self, img):
  
@@ -345,7 +272,7 @@ class StyleGAN_Inversion():
 
         else:
             Ps, Pc, noises, optim = self.init_learners()
-            loss = self.learn_inversion(img, Ps, Pc, noises, optim)
+            self.learn_inversion(img, Ps, Pc, noises, optim)
 
             save_dir = args.output_dir
             if self.ops:
@@ -358,7 +285,7 @@ if __name__ == "__main__":
         description="Image projector to the generator latent spaces"
     )
     parser.add_argument(
-        "--ckpt", type=str, default='model/550000.pt', help="path to the model checkpoint"
+        "--ckpt", type=str, default='model/stylegan2-ffhq-config-f.pt', help="path to the model checkpoint"
     )
     parser.add_argument(
         "--size", type=int, default=256, help="output image sizes of the generator"
