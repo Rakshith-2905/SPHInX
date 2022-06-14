@@ -8,14 +8,14 @@ Inverting an image onto the latent space of pre-trained generators, e.g., StyleG
 ## Results
 
 
-### Brightness Attribute
+<!-- ### Brightness Attribute
 ![](figures/Brightness.gif)
 
 ### Rotation Attribute
 ![](figures/Rotate.gif)
 
 ### Image Morphing
-![](figures/CXR_Morphing.gif)
+![](figures/CXR_Morphing.gif) -->
 
 
 ##  Installation
